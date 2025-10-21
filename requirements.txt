@@ -1,0 +1,15 @@
+# LLM
+torch
+transformers
+peft
+datasets
+# Data & API
+yfinance
+finnhub-python
+# Server
+fastapi
+uvicorn[standard]
+# Utility
+pydantic
+
+bitsandbytes
