@@ -1,197 +1,371 @@
-# Chứa logic API chính FastAPI endpoints và hàm sinh văn bản gen_reply
-import os
-from dotenv import load_dotenv
-
-from datetime import datetime, timedelta
-import yfinance as yf
-import finnhub
-from pydantic import BaseModel
-from typing import List, Optional, Iterator
-import re 
-from fastapi import FastAPI
+"""
+FinGPT Forecaster Server - Optimized for Mac M4
+Clean, modular architecture with performance optimizations
+"""
+import logging
+import time
+from typing import Optional
+from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 
-# Thư viện cho LLM
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
-import torch
+from config import setting as config
+from core.model import load_model_and_tokenizer, generate_forecast, get_model_info, cleanup_memory
+from services.data_service import build_forecast_prompt
+from core.cache import cached_forecast, cached_financial_data, get_cache_stats, clear_all_caches
 
-# Hàm thu nhập dữ liệu
-def fetch_data_for_prompt(ticker: str, end_date: str, past_weeks: int, include_financials: bool) -> str:
-    """Thu thập dữ liệu từ yfinance và Finnhub, sau đó tạo prompt."""
-    
-    # Tính toán khoảng thời gian
-    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-    start_dt = end_dt - timedelta(weeks=past_weeks)
-    
-    start_date_str = start_dt.strftime("%Y-%m-%d")
-    end_date_str = end_dt.strftime("%Y-%m-%d")
-    
-    # --- 3.1. Thu thập Thông tin Cơ bản (Finnhub) ---
-    try:
-        profile = finnhub_client.company_profile2(symbol=ticker)
-    except Exception as e:
-        print(f"Error fetching company profile: {e}")
-        profile = {} # Dùng dictionary rỗng nếu lỗi
-        
-    # --- 3.2. Thu thập Dữ liệu Giá Cổ phiếu (yfinance) ---
-    stock_data = yf.Ticker(ticker).history(start=start_date_str, end=end_date_str)
-    
-    if stock_data.empty:
-        raise ValueError(f"No stock data found for {ticker} from {start_date_str} to {end_date_str}")
-    
-    start_price = stock_data['Close'].iloc[0]
-    end_price = stock_data['Close'].iloc[-1]
-    
-    price_change = "increased" if end_price > start_price else "decreased"
+# Configure logging
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL),
+    format=config.LOG_FORMAT
+)
+logger = logging.getLogger(__name__)
 
-    # --- 3.3. Thu thập Tin tức (Finnhub) ---
-    # Giới hạn tin tức trong phạm vi 1 tháng (4 tuần) trước ngày kết thúc
-    news_list = finnhub_client.company_news(ticker, _from=start_date_str, to=end_date_str)
+# Initialize FastAPI
+app = FastAPI(
+    title="FinGPT Forecaster",
+    description="Stock market forecasting using FinGPT (Optimized for Mac M4)",
+    version="2.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# =============================================================================
+# PYDANTIC MODELS
+# =============================================================================
+
+class ForecastRequest(BaseModel):
+    """Request model for stock forecasting"""
+    ticker: str = Field(..., description="Stock ticker symbol (e.g., AAPL)")
+    end_date: str = Field(..., description="End date in YYYY-MM-DD format")
+    past_weeks: int = Field(default=4, ge=1, le=12, description="Weeks to look back")
+    include_financials: bool = Field(default=False, description="Include financial metrics")
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="Sampling temperature")
+    max_new_tokens: Optional[int] = Field(default=None, ge=50, le=512, description="Max tokens to generate")
+    stream: bool = Field(default=True, description="Stream the response")
+
+
+class ForecastResponse(BaseModel):
+    """Response model for non-streaming forecast"""
+    id: str
+    object: str
+    choices: list
     
-    news_string = ""
-    for item in news_list[:10]: # Giới hạn 10 tin tức quan trọng nhất
-        news_string += f"[Headline]: {item['headline']}\n[Summary]: {item['summary']}\n\n"
-    
-    # --- 3.4. Thu thập Tài chính Cơ bản (Finnhub - Tùy chọn) ---
-    financials_string = ""
-    if include_financials:
-        # Finnhub có nhiều endpoint tài chính, ta dùng basic_financials (ví dụ)
-        basic_financials = finnhub_client.company_basic_financials(ticker, 'all')
-        if basic_financials and 'metric' in basic_financials:
-            metrics = basic_financials['metric']
-            # Chọn lọc một số chỉ số quan trọng
-            selected_metrics = {
-                'marketCapitalization': metrics.get('marketCapitalization', 'N/A'),
-                'beta': metrics.get('beta', 'N/A'),
-                'peTTM': metrics.get('peTTM', 'N/A'),
+    class Config:
+        schema_extra = {
+            "example": {
+                "id": "chatcmpl-fingpt",
+                "object": "chat.completion",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "[Positive Developments]:\n1. ..."
+                    },
+                    "finish_reason": "stop"
+                }]
             }
-            financials_string = "\n".join([f"{k}: {v}" for k, v in selected_metrics.items()])
-            financials_string = f"Some recent basic financials of {profile.get('name', ticker)}, reported at {end_date_str}, are presented below:\n\n[Basic Financials]:\n{financials_string}\n"
+        }
+
+
+# =============================================================================
+# STARTUP / SHUTDOWN
+# =============================================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """Load model on startup"""
+    logger.info("🚀 Starting FinGPT Forecaster Server...")
+    logger.info(f"   Quantization: {'4-bit' if config.USE_4BIT_QUANTIZATION else '8-bit' if config.USE_8BIT_QUANTIZATION else 'FP16'}")
+    logger.info(f"   Caching: {'Enabled' if config.ENABLE_CACHING else 'Disabled'}")
     
-    # --- 3.5. Xây dựng Prompt (Dùng template từ README) ---
-    
-    # Điền dữ liệu vào template
-    prompt_template = f"""
-[Company Introduction]:
-
-{profile.get('name', ticker)} is a leading entity in the {profile.get('finnhubIndustry', 'N/A')} sector. Incorporated and publicly traded since {profile.get('ipo', 'N/A')}, the company has established its reputation as one of the key players in the market. As of today, {profile.get('name', ticker)} has a market capitalization of {profile.get('marketCapitalization', 0.0):.2f} in {profile.get('currency', 'USD')}, with {profile.get('shareOutstanding', 0.0):.2f} shares outstanding. {profile.get('name', ticker)} operates primarily in the {profile.get('country', 'N/A')}, trading under the ticker {ticker} on the {profile.get('exchange', 'N/A')}. As a dominant force in the {profile.get('finnhubIndustry', 'N/A')} space, the company continues to innovate and drive progress within the industry.
-
-From {start_date_str} to {end_date_str}, {profile.get('name', ticker)}'s stock price {price_change} from {start_price:.2f} to {end_price:.2f}. Company news during this period are listed below:
-
-{news_string}
-
-{financials_string}
-
-Based on all the information before {end_date_str}, let's first analyze the positive developments and potential concerns for {ticker}. Come up with 2-4 most important factors respectively and keep them concise. Most factors should be inferred from company-related news. Then make your prediction of the {ticker} stock price movement for next week ({start_date_str} to {end_date_str}). Provide a summary analysis to support your prediction.
-"""
-    # Loại bỏ khoảng trắng thừa
-    return prompt_template.strip()
-
-# Khởi tạo FastAPI
-app = FastAPI()
-
-# Biến môi trường cho Finnhub API Key
-FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
-
-# Khởi tạo Finnhub Client
-# TODO: Kiểm tra nếu FINNHUB_API_KEY không tồn tại
-finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
-
-
-# Constants cho Llama format (từ README)
-B_INST, E_INST = "[INST]", "[/INST]"
-B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
-
-# SYSTEM PROMPT (từ README)
-SYSTEM_PROMPT = """You are a seasoned stock market analyst. Your task is to list the positive developments and potential concerns for companies based on relevant news and basic financials from the past weeks, then provide an analysis and prediction for the companies' stock price movement for the upcoming week. Your answer format should be as follows:\n\n[Positive Developments]:\n1. ...\n\n[Potential Concerns]:\n1. ...\n\n[Prediction & Analysis]:\n...\n"""
-
-# Hàm sinh văn bản thực tế
-def gen_reply(full_prompt: str, temperature: float = 0.2) -> Iterator[str]:
-    # ... (Tạo final_prompt và tokenize inputs) ...
-    
-    # Sử dụng generator để truyền dữ liệu sinh ra
-    class StreamingGenerator:
-        def __init__(self):
-            self.queue = Queue()
-            self.stop_signal = object()
-        
-        def put(self, token_ids):
-            # Decode token IDs thành văn bản
-            text = tokenizer.decode(token_ids, skip_special_tokens=True)
-            self.queue.put(text)
-        
-        def end(self):
-            self.queue.put(self.stop_signal)
-            
-        def __iter__(self):
-            while True:
-                item = self.queue.get()
-                if item is self.stop_signal:
-                    break
-                yield item
-
-    generator = StreamingGenerator()
-    streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True, output_handler=generator)
-
-    def generate_and_stream():
-        # Chạy trong một thread hoặc async task để không chặn FastAPI
-        model.generate(
-            **inputs, 
-            max_length=4096, 
-            do_sample=True,
-            temperature=temperature,
-            eos_token_id=tokenizer.eos_token_id,
-            streamer=streamer # Dùng streamer thay vì nhận res
-        )
-        generator.end()
-
-    # Bắt đầu sinh và trả về iterator
-    import threading
-    threading.Thread(target=generate_and_stream).start()
-    return generator # Trả về generator để StreamingResponse dùng
-
-# --- Cập nhật hàm chat trong server.py ---
-class ForecasterRequest(BaseModel):
-    ticker: str
-    end_date: str # Định dạng YYYY-MM-DD
-    past_weeks: int
-    include_financials: bool
-    # Các trường khác: model, temperature, stream (như đã có)
-
-@app.post("/v1/chat/completions")
-def chat(req: ForecasterRequest):
-    
-    # Tạo full prompt
     try:
-        user_prompt = fetch_data_for_prompt(
-            req.ticker, 
-            req.end_date, 
-            req.past_weeks, 
-            req.include_financials
-        )
+        load_model_and_tokenizer()
+        logger.info("✅ Server ready!")
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        logger.error(f"❌ Failed to load model: {e}")
+        raise
 
-    # ... Phần còn lại của logic streaming (như bạn đã viết) ...
-    if req.stream:
-        def sse():
-            for ch in gen_reply(user_prompt, req.temperature): # Truyền prompt vào
-                # Định dạng SSE cho AI SDK của Vercel
-                yield f'data: {{"id":"dummy","object":"chat.completion.chunk","choices":[{{"delta":{{"content":"{ch}"}}}}]}}\n\n'
-            yield 'data: [DONE]\n\n'
-        return StreamingResponse(sse(), media_type="text/event-stream")
 
-    # ... Logic non-streaming nếu cần ...
-    text = "".join(list(gen_reply(user_prompt, req.temperature)))
-    return JSONResponse({
-        "id": "chatcmpl-fingpt",
-        "object": "chat.completion",
-        "choices": [
-            {"message": {"role": "assistant", "content": text}}
-        ]
-    })
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("🛑 Shutting down server...")
+    cleanup_memory()
+    logger.info("✅ Cleanup complete")
 
+
+# =============================================================================
+# API ENDPOINTS
+# =============================================================================
+
+@app.get("/")
+async def root():
+    """Root endpoint with server info"""
+    model_info = get_model_info()
+    
+    return {
+        "service": "FinGPT-Forecaster",
+        "version": "2.0.0",
+        "status": "running",
+        "optimized_for": "Mac M4 16GB RAM",
+        "model": model_info,
+        "features": {
+            "quantization": config.USE_4BIT_QUANTIZATION or config.USE_8BIT_QUANTIZATION,
+            "caching": config.ENABLE_CACHING,
+            "streaming": True
+        }
+    }
+
+
+@app.get("/health")
 @app.get("/healthz")
-def healthz():
-    return {"status": "ok", "service": "FinGPT-Forecaster"}
+async def health_check():
+    """Health check endpoint"""
+    model_info = get_model_info()
+    
+    return {
+        "status": "healthy" if model_info["loaded"] else "loading",
+        "service": "FinGPT-Forecaster",
+        "model_loaded": model_info["loaded"]
+    }
+
+
+@app.get("/v1/models")
+async def list_models():
+    """List available models (OpenAI compatibility)"""
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "fingpt-forecaster-llama2-7b",
+                "object": "model",
+                "owned_by": "fingpt",
+                "precision": "4-bit" if config.USE_4BIT_QUANTIZATION else "FP16",
+                "optimized_for": "Mac M4"
+            }
+        ]
+    }
+
+
+@app.post("/v1/chat/completions", response_model=None)
+async def create_forecast(request: ForecastRequest):
+    """
+    Main endpoint for stock forecasting
+    
+    Supports both streaming and non-streaming responses
+    """
+    model_info = get_model_info()
+    if not model_info["loaded"]:
+        raise HTTPException(
+            status_code=503,
+            detail="Model not loaded yet. Please wait..."
+        )
+    
+    # Measure time
+    start_time = time.time()
+    
+    try:
+        # Build prompt (with caching if enabled)
+        if config.ENABLE_CACHING:
+            @cached_financial_data
+            def get_cached_prompt(ticker, end_date, past_weeks, include_financials):
+                return build_forecast_prompt(ticker, end_date, past_weeks, include_financials)
+            
+            prompt = get_cached_prompt(
+                request.ticker,
+                request.end_date,
+                request.past_weeks,
+                request.include_financials
+            )
+        else:
+            prompt = build_forecast_prompt(
+                request.ticker,
+                request.end_date,
+                request.past_weeks,
+                request.include_financials
+            )
+        
+        # Generate forecast
+        if request.stream:
+            # Streaming response
+            async def stream_generator():
+                try:
+                    # Wrap in cache decorator if enabled
+                    if config.ENABLE_CACHING:
+                        generator = cached_forecast(generate_forecast)(
+                            prompt,
+                            request.temperature,
+                            request.max_new_tokens,
+                            stream=True
+                        )
+                    else:
+                        generator = generate_forecast(
+                            prompt,
+                            request.temperature,
+                            request.max_new_tokens,
+                            stream=True
+                        )
+                    
+                    for chunk in generator:
+                        # Escape special characters for JSON
+                        escaped = chunk.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+                        yield f'data: {{"id":"chatcmpl-fingpt","object":"chat.completion.chunk","choices":[{{"delta":{{"content":"{escaped}"}},"index":0}}]}}\n\n'
+                    
+                    yield 'data: [DONE]\n\n'
+                    
+                    # Log completion time
+                    if config.LOG_GENERATION_TIME:
+                        elapsed = time.time() - start_time
+                        logger.info(f"⏱️  Total time: {elapsed:.1f}s for {request.ticker}")
+                
+                except Exception as e:
+                    error_msg = f"{type(e).__name__}: {str(e)}"
+                    logger.error(f"❌ Stream error: {error_msg}")
+                    yield f'data: {{"error":"{error_msg}"}}\n\n'
+            
+            return StreamingResponse(
+                stream_generator(),
+                media_type="text/event-stream"
+            )
+        
+        else:
+            # Non-streaming response
+            if config.ENABLE_CACHING:
+                generator = cached_forecast(generate_forecast)(
+                    prompt,
+                    request.temperature,
+                    request.max_new_tokens,
+                    stream=False
+                )
+            else:
+                generator = generate_forecast(
+                    prompt,
+                    request.temperature,
+                    request.max_new_tokens,
+                    stream=False
+                )
+            
+            text = "".join(generator)
+            
+            # Log completion time
+            if config.LOG_GENERATION_TIME:
+                elapsed = time.time() - start_time
+                logger.info(f"⏱️  Total time: {elapsed:.1f}s for {request.ticker}")
+            
+            return JSONResponse({
+                "id": "chatcmpl-fingpt",
+                "object": "chat.completion",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": text
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": len(prompt.split()),
+                    "completion_tokens": len(text.split()),
+                    "total_tokens": len(prompt.split()) + len(text.split())
+                }
+            })
+    
+    except ValueError as e:
+        logger.error(f"❌ Data error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    except Exception as e:
+        logger.error(f"❌ Generation error: {e}")
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
+
+
+# =============================================================================
+# CACHE MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.get("/cache/stats")
+async def get_stats():
+    """Get cache statistics"""
+    if not config.ENABLE_CACHING:
+        return {"error": "Caching is disabled"}
+    
+    stats = get_cache_stats()
+    return {
+        "status": "ok",
+        "caching_enabled": True,
+        "stats": stats
+    }
+
+
+@app.post("/cache/clear")
+async def clear_cache():
+    """Clear all caches"""
+    if not config.ENABLE_CACHING:
+        return {"error": "Caching is disabled"}
+    
+    clear_all_caches()
+    return {
+        "status": "ok",
+        "message": "All caches cleared"
+    }
+
+
+# =============================================================================
+# DEBUG ENDPOINTS
+# =============================================================================
+
+@app.get("/debug/model")
+async def debug_model_info():
+    """Get detailed model information"""
+    return get_model_info()
+
+
+@app.get("/debug/config")
+async def debug_config():
+    """Get current configuration (excluding secrets)"""
+    return {
+        "model": {
+            "base_path": config.BASE_MODEL_PATH,
+            "lora_path": config.LORA_WEIGHTS_PATH,
+            "quantization": "4-bit" if config.USE_4BIT_QUANTIZATION else "8-bit" if config.USE_8BIT_QUANTIZATION else "FP16",
+        },
+        "generation": {
+            "max_tokens": config.DEFAULT_MAX_NEW_TOKENS,
+            "temperature": config.DEFAULT_TEMPERATURE,
+            "top_p": config.DEFAULT_TOP_P,
+            "top_k": config.DEFAULT_TOP_K,
+        },
+        "caching": {
+            "enabled": config.ENABLE_CACHING,
+            "financial_ttl": config.FINANCIAL_CACHE_TTL,
+            "forecast_ttl": config.FORECAST_CACHE_TTL,
+        },
+        "memory": {
+            "low_memory_mode": config.LOW_MEMORY_MODE,
+            "use_mps": config.USE_MPS_IF_AVAILABLE,
+        }
+    }
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    uvicorn.run(
+        "server:app",
+        host=config.HOST,
+        port=config.PORT,
+        reload=config.RELOAD
+    )

@@ -1,15 +1,27 @@
-# LLM
-torch
-transformers
-peft
-datasets
-# Data & API
-yfinance
-finnhub-python
-# Server
-fastapi
-uvicorn[standard]
-# Utility
-pydantic
+# Core Dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-dotenv==1.0.0
+pydantic==2.5.0
 
-bitsandbytes
+# LLM & ML - Mac M4 Optimized
+transformers>=4.35.0
+accelerate>=0.25.0
+peft>=0.7.0
+sentencepiece>=0.1.99
+torch>=2.0.0  
+
+# Financial Data
+yfinance==0.2.32
+finnhub-python==2.4.19
+
+# Caching
+cachetools==5.3.2
+
+# System Monitoring
+psutil==5.9.6
+
+# Development Tools (optional)
+pytest==7.4.3
+black==23.11.0
+flake8==6.1.0requests>=2.31.0
