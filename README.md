@@ -415,4 +415,4 @@ This code is provided as-is for educational and research purposes.
 
 ---
 
-**Ready to get started?** → Follow [SETUP_GUIDE.md](docs/SETUP_GUIDE.md)
+**Ready to get started?** → Follow [SETUP_GUIDE.md](docs/SETUP_GUIDE.md)# fingpt_service
