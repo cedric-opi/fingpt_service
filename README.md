@@ -42,6 +42,29 @@ source venv/bin/activate
 
 # Install requirements
 pip install -r requirements.txt
+
+# Set up llama.cpp
+CMAKE_ARGS="-DLLAMA_METAL=on" pip install llama-cpp-python --force-reinstall --no-cache-dir 
+python -c "from llama_cpp import Llama; print('✅ llama-cpp-python installed!')"   
+pip install huggingface-hub 
+mkdir -p models       
+huggingface-cli download TheBloke/Llama-2-7B-Chat-GGUF \                                               
+  llama-2-7b-chat.Q4_K_M.gguf \
+  --local-dir ./models \
+  --local-dir-use-symlinks False
+
+# If needed login
+huggingface-cli login
+huggingface-cli download TheBloke/Llama-2-7B-Chat-GGUF \                                               
+  llama-2-7b-chat.Q4_K_M.gguf \
+  --local-dir ./models \
+  --local-dir-use-symlinks False
+
+# Check model list
+ls -lh models/ 
+
+# Start server
+python server.py
 ```
 
 ### 2. Configure
@@ -222,6 +245,42 @@ Return to User
 
 ---
 
+## 🐛 Troubleshooting
+
+### bitsandbytes Won't Install
+
+```python
+# Disable quantization in setting.py
+USE_4BIT_QUANTIZATION = False
+USE_8BIT_QUANTIZATION = False
+```
+
+Or try llama.cpp (see `OPTIMIZATION_STRATEGY.md`)
+
+### Out of Memory
+
+```python
+# In setting.py
+USE_4BIT_QUANTIZATION = True
+DEFAULT_MAX_NEW_TOKENS = 200
+LOW_MEMORY_MODE = True
+```
+
+### Slow Generation
+
+1. Check quantization is enabled: `GET /debug/model`
+2. Reduce max_new_tokens: `DEFAULT_MAX_NEW_TOKENS = 128`
+3. Run benchmark: `python benchmark.py`
+
+### Cache Not Working
+
+```bash
+# Check server logs for cache HIT/MISS
+# Test with: ./scripts/test_cache.sh
+```
+
+---
+
 ## 📚 Documentation
 
 - **[SETUP_GUIDE.md](docs/SETUP_GUIDE.md)** - Complete setup and migration guide
@@ -230,6 +289,13 @@ Return to User
 - **[RESTRUCTURE_PLAN.md](docs/RESTRUCTURE_PLAN.md)** - Architecture overview
 
 ---
+
+## 🧪 Testing
+
+### Run Benchmark
+```bash
+python benchmark.py
+```
 
 ### Manual Test
 ```bash
@@ -263,6 +329,7 @@ Get Finnhub API key: https://finnhub.io/register
 ## 📋 Requirements
 
 - Python 3.9-3.12 (avoid 3.14 on Mac)
+- Mac M4, M3, M2, M1 (or any Apple Silicon)
 - 16GB RAM (8GB available during generation)
 - ~15GB disk space for model
 
@@ -287,20 +354,3 @@ Get Finnhub API key: https://finnhub.io/register
 - **Real-time analysis** - Streaming responses
 
 ---
-
-## 🤝 Contributing
-
-This is an optimized reference implementation. Feel free to:
-
-- Tune parameters in `setting.py`
-- Extend `data_service.py` for more data sources
-- Add new endpoints in `server.py`
----
-
-## 📄 License
-
-This code is provided as-is for educational and research purposes.
-
-**Base Model**: Llama-2-7b-chat-hf (Meta AI License)  
-**FinGPT**: Follow FinGPT project guidelines
-
