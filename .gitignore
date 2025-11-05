@@ -39,4 +39,6 @@ data/
 datasets/
 outputs/
 runs/
+.env
 .env.*
+!.env.example
