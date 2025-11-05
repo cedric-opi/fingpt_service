@@ -1,10 +1,42 @@
-# Python
-venv/
+# ===== Python =====
 __pycache__/
-*.pyc
-*.env
+*.py[cod]
+*.pyo
+*.pyd
+*.so
 
-
+# ===== Virtual Environment =====
 venv/
-__pycache__/
-*.pyc
+.venv/
+env/
+ENV/
+
+# ===== macOS =====
+.DS_Store
+
+# ===== IDE / Editor =====
+.vscode/
+.idea/
+*.swp
+
+# ===== Model Files / Checkpoints =====
+*.gguf
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# ===== Logs / Cache =====
+logs/
+*.log
+*.tmp
+.cache/
+__cache__/
+
+# ===== Data / Artifacts =====
+data/
+datasets/
+outputs/
+runs/
+.env.*

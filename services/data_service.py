@@ -186,17 +186,82 @@ def build_forecast_prompt(
     if include_financials:
         financials_string = fetch_basic_financials(ticker, company_name, end_date_str)
     
-    # Build the prompt
+    # Add technical indicators
+    technical_indicators = calculate_technical_indicators(ticker, start_date_str, end_date_str)
+
+    # Enhanced prompt with price prediction request
     prompt = f"""[Company Introduction]:
+{company_name} is a leading entity in the {profile.get('finnhubIndustry', 'N/A')} sector...
 
-{company_name} is a leading entity in the {profile.get('finnhubIndustry', 'N/A')} sector. Incorporated and publicly traded since {profile.get('ipo', 'N/A')}, the company has established its reputation as one of the key players in the market. As of today, {company_name} has a market capitalization of {profile.get('marketCapitalization', 0.0):.2f} in {profile.get('currency', 'USD')}, with {profile.get('shareOutstanding', 0.0):.2f} shares outstanding. {company_name} operates primarily in the {profile.get('country', 'N/A')}, trading under the ticker {ticker} on the {profile.get('exchange', 'N/A')}. As a dominant force in the {profile.get('finnhubIndustry', 'N/A')} space, the company continues to innovate and drive progress within the industry.
+{technical_indicators}
 
-From {start_date_str} to {end_date_str}, {company_name}'s stock price {price_change} from {start_price:.2f} to {end_price:.2f}. Company news during this period are listed below:
+From {start_date_str} to {end_date_str}, {company_name}'s stock price {price_change} from ${start_price:.2f} to ${end_price:.2f}.
 
+Company news during this period:
 {news_string}
 
 {financials_string}
 
-Based on all the information before {end_date_str}, let's first analyze the positive developments and potential concerns for {ticker}. Come up with 2-4 most important factors respectively and keep them concise. Most factors should be inferred from company-related news. Then make your prediction of the {ticker} stock price movement for next week. Provide a summary analysis to support your prediction."""
+Based on all the information above, provide a comprehensive analysis:
+
+1. List 2-4 most important POSITIVE developments (be specific with numbers/dates)
+2. List 2-4 most important POTENTIAL CONCERNS (be specific)
+3. Provide a DETAILED price prediction for next week with:
+   - Target price range (low/high estimates)
+   - Percentage change prediction
+   - Key factors driving the prediction
+   - Risk level (Low/Medium/High)
+
+Format your response EXACTLY as follows:
+
+[Positive Developments]:
+1. ...
+2. ...
+
+[Potential Concerns]:
+1. ...
+2. ...
+
+[Price Prediction for Next Week]:
+Target Range: $X.XX - $Y.YY
+Expected Change: +/-Z.Z%
+Confidence: Low/Medium/High
+
+[Analysis & Rationale]:
+..."""
     
     return prompt.strip()
+
+def calculate_technical_indicators(ticker: str, start_date: str, end_date: str) -> str:
+    """Calculate technical indicators for better predictions"""
+    stock_data = yf.Ticker(ticker).history(start=start_date, end=end_date)
+    
+    if stock_data.empty:
+        return ""
+    
+    # Calculate indicators
+    current_price = stock_data['Close'].iloc[-1]
+    high_52w = stock_data['High'].max()
+    low_52w = stock_data['Low'].min()
+    avg_volume = stock_data['Volume'].mean()
+    
+    # Simple Moving Averages
+    sma_10 = stock_data['Close'].tail(10).mean()
+    sma_50 = stock_data['Close'].tail(50).mean() if len(stock_data) >= 50 else None
+    
+    # Price momentum
+    price_change_1w = ((stock_data['Close'].iloc[-1] / stock_data['Close'].iloc[-5]) - 1) * 100 if len(stock_data) >= 5 else 0
+    price_change_1m = ((stock_data['Close'].iloc[-1] / stock_data['Close'].iloc[0]) - 1) * 100
+    
+    indicators = f"""
+[Technical Indicators]:
+Current Price: ${current_price:.2f}
+52-Week High: ${high_52w:.2f}
+52-Week Low: ${low_52w:.2f}
+Average Volume: {avg_volume:,.0f}
+10-Day SMA: ${sma_10:.2f}
+{'50-Day SMA: $' + f'{sma_50:.2f}' if sma_50 else '50-Day SMA: N/A'}
+1-Week Change: {price_change_1w:+.2f}%
+1-Month Change: {price_change_1m:+.2f}%
+"""
+    return indicators.strip()
