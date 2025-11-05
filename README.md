@@ -83,9 +83,6 @@ curl -X POST http://localhost:8000/v1/chat/completions \
     "end_date": "2024-10-30",
     "stream": false
   }'
-
-# Run benchmark
-python benchmark.py
 ```
 
 ---
@@ -117,7 +114,7 @@ fingpt-server/
 
 ## 🔧 Configuration
 
-All settings in `config.py`:
+All settings in `setting.py`:
 
 ### Performance Tuning
 
@@ -225,42 +222,6 @@ Return to User
 
 ---
 
-## 🐛 Troubleshooting
-
-### bitsandbytes Won't Install
-
-```python
-# Disable quantization in config.py
-USE_4BIT_QUANTIZATION = False
-USE_8BIT_QUANTIZATION = False
-```
-
-Or try llama.cpp (see `OPTIMIZATION_STRATEGY.md`)
-
-### Out of Memory
-
-```python
-# In config.py
-USE_4BIT_QUANTIZATION = True
-DEFAULT_MAX_NEW_TOKENS = 200
-LOW_MEMORY_MODE = True
-```
-
-### Slow Generation
-
-1. Check quantization is enabled: `GET /debug/model`
-2. Reduce max_new_tokens: `DEFAULT_MAX_NEW_TOKENS = 128`
-3. Run benchmark: `python benchmark.py`
-
-### Cache Not Working
-
-```bash
-# Check server logs for cache HIT/MISS
-# Test with: ./scripts/test_cache.sh
-```
-
----
-
 ## 📚 Documentation
 
 - **[SETUP_GUIDE.md](docs/SETUP_GUIDE.md)** - Complete setup and migration guide
@@ -270,23 +231,10 @@ LOW_MEMORY_MODE = True
 
 ---
 
-## 🧪 Testing
-
-### Run Benchmark
-```bash
-python benchmark.py
-```
-
-### Test Cache
-```bash
-chmod +x scripts/test_cache.sh
-./scripts/test_cache.sh
-```
-
 ### Manual Test
 ```bash
 # Terminal 1: Start server
-python server_optimized.py
+python server.py
 
 # Terminal 2: Test request
 curl -X POST http://localhost:8000/v1/chat/completions \
@@ -315,7 +263,6 @@ Get Finnhub API key: https://finnhub.io/register
 ## 📋 Requirements
 
 - Python 3.9-3.12 (avoid 3.14 on Mac)
-- Mac M4, M3, M2, M1 (or any Apple Silicon)
 - 16GB RAM (8GB available during generation)
 - ~15GB disk space for model
 
@@ -345,11 +292,9 @@ Get Finnhub API key: https://finnhub.io/register
 
 This is an optimized reference implementation. Feel free to:
 
-- Tune parameters in `config.py`
+- Tune parameters in `setting.py`
 - Extend `data_service.py` for more data sources
-- Add new endpoints in `server_optimized.py`
-- Improve prompts in `config.py`
-
+- Add new endpoints in `server.py`
 ---
 
 ## 📄 License
@@ -359,60 +304,3 @@ This code is provided as-is for educational and research purposes.
 **Base Model**: Llama-2-7b-chat-hf (Meta AI License)  
 **FinGPT**: Follow FinGPT project guidelines
 
----
-
-## 🆘 Support
-
-1. **Check documentation** in `/docs` folder
-2. **Run diagnostics**: `GET /debug/model`, `GET /debug/config`
-3. **Test components**: Use scripts in `/scripts`
-4. **Review logs**: Server prints detailed information
-
----
-
-## ✨ What's New
-
-### v2.0 (Optimized)
-- ✅ 15-20x faster generation
-- ✅ 60% less memory usage
-- ✅ Clean modular architecture
-- ✅ 4-bit quantization support
-- ✅ Enhanced error handling
-- ✅ Comprehensive documentation
-
-### v1.0 (Original)
-- Basic FinGPT implementation
-- Monolithic server.py
-- FP16 inference
-- Basic caching
-
----
-
-## 🎉 Success Stories
-
-**Before Optimization:**
-- 😫 3-5 hours per forecast
-- 😫 16GB RAM usage (OOM errors)
-- 😫 Hard to maintain monolithic code
-
-**After Optimization:**
-- 🚀 12-18 minutes per forecast
-- 🚀 4-6GB RAM usage (stable)
-- 🚀 Easy to extend modular code
-
----
-
-**Made with ❤️ for efficient financial forecasting on Apple Silicon**
-
----
-
-## Quick Links
-
-- 📖 [Setup Guide](docs/SETUP_GUIDE.md)
-- 🎯 [Optimization Strategy](docs/OPTIMIZATION_STRATEGY.md)
-- 📊 [Executive Summary](docs/EXECUTIVE_SUMMARY.md)
-- 🏗️ [Architecture](docs/RESTRUCTURE_PLAN.md)
-
----
-
-**Ready to get started?** → Follow [SETUP_GUIDE.md](docs/SETUP_GUIDE.md)# fingpt_service
