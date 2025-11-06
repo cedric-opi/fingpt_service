@@ -58,7 +58,7 @@ class ForecastRequest(BaseModel):
     past_weeks: int = Field(default=4, ge=1, le=12, description="Weeks to look back")
     include_financials: bool = Field(default=True, description="Include financial metrics")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="Sampling temperature")
-    max_new_tokens: Optional[int] = Field(default=128, ge=50, le=512, description="Max tokens to generate")
+    max_new_tokens: Optional[int] = Field(default=512, ge=50, le=1024, description="Max tokens to generate")
     stream: bool = Field(default=True, description="Stream the response")
 
 

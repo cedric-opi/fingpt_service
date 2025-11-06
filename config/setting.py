@@ -36,11 +36,11 @@ MODEL_DTYPE = "bfloat16"
 # GENERATION PARAMETERS
 # =============================================================================
 # 🎯 Optimized for speed vs quality balance
-DEFAULT_MAX_NEW_TOKENS = 128  # Reduced from 1024 for speed
-DEFAULT_TEMPERATURE = 0.1
-DEFAULT_TOP_P = 0.9
-DEFAULT_TOP_K = 20  # Reduced from 50
-DEFAULT_REPETITION_PENALTY = 1.15
+DEFAULT_MAX_NEW_TOKENS = 1024  # Reduced from 1024 for speed
+DEFAULT_TEMPERATURE = 0.7
+DEFAULT_TOP_P = 0.95
+DEFAULT_TOP_K = 50  # Reduced from 50
+DEFAULT_REPETITION_PENALTY = 1.1
 
 # Advanced generation settings
 NUM_BEAMS = 1  # Keep at 1 for streaming
@@ -93,17 +93,21 @@ CORS_ORIGINS = ["*"]  # In production, specify your frontend URL
 B_INST, E_INST = "[INST]", "[/INST]"
 B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
 
-SYSTEM_PROMPT = """You are a seasoned stock market analyst. Your task is to list the positive developments and potential concerns for companies based on relevant news and basic financials from the past weeks, then provide an analysis and prediction for the companies' stock price movement for the upcoming week. Your answer format should be as follows:
+SYSTEM_PROMPT = """You're a Wall Street analyst. Be direct and specific.
 
+For stock forecasts:
 [Positive Developments]:
-1. ...
+1. Recent specific development
+2. Another development
 
 [Potential Concerns]:
-1. ...
+1. Specific concern
+2. Another concern  
 
 [Prediction & Analysis]:
-...
-"""
+Brief prediction with key factors.
+
+For other questions: Answer directly in 2-3 sentences. No textbook explanations."""
 
 # =============================================================================
 # LOGGING
