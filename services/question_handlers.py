@@ -227,3 +227,154 @@ Provide thoughtful guidance that:
 IMPORTANT: Always remind users to consult with a licensed financial advisor before making investment decisions."""
     
     yield from generate_forecast_llama_cpp(prompt, stream=True)
+
+
+def create_investment_advice_prompt(query: str) -> str:
+    """Create prompt for investment advice questions"""
+    return f"""You are a professional financial advisor providing investment guidance.
+
+User Question: {query}
+
+Provide balanced, informative advice that includes:
+1. Key factors to consider
+2. Potential risks and rewards
+3. General market context
+4. A clear recommendation with reasoning
+
+Remember: Always include appropriate disclaimers about doing your own research and consulting financial professionals.
+
+Answer:"""
+
+def create_comparison_prompt(ticker1: str, ticker2: str, end_date: str) -> str:
+    """
+    Create prompt for comparing two stocks (returns prompt string, doesn't stream)
+    """
+    try:
+        # Fetch comprehensive data for both stocks
+        stock1_data = _fetch_comparison_data(ticker1, end_date)
+        stock2_data = _fetch_comparison_data(ticker2, end_date)
+        
+        # Build detailed comparison prompt
+        return f"""You are FinGPT, a financial forecasting expert. Compare these two stocks for investment over the next 1 week.
+
+{'='*60}
+STOCK 1: {ticker1}
+{'='*60}
+Company: {stock1_data['name']}
+Sector: {stock1_data['sector']}
+Industry: {stock1_data['industry']}
+
+RECENT PRICE PERFORMANCE (4 weeks):
+- Current Price: ${stock1_data['current_price']:.2f}
+- 4-Week Change: {stock1_data['price_change_pct']:+.2f}%
+- 52-Week Range: ${stock1_data['year_low']:.2f} - ${stock1_data['year_high']:.2f}
+- Average Volume: {stock1_data['avg_volume']:,.0f}
+
+FINANCIAL METRICS:
+- Market Cap: ${stock1_data['market_cap']:,.0f}
+- P/E Ratio: {stock1_data['pe_ratio']}
+- EPS: ${stock1_data['eps']}
+- Profit Margin: {stock1_data['profit_margin']}%
+- Revenue Growth: {stock1_data['revenue_growth']}%
+- Debt/Equity: {stock1_data['debt_to_equity']}
+
+RECENT NEWS SENTIMENT: {stock1_data['news_summary']}
+
+{'='*60}
+STOCK 2: {ticker2}
+{'='*60}
+Company: {stock2_data['name']}
+Sector: {stock2_data['sector']}
+Industry: {stock2_data['industry']}
+
+RECENT PRICE PERFORMANCE (4 weeks):
+- Current Price: ${stock2_data['current_price']:.2f}
+- 4-Week Change: {stock2_data['price_change_pct']:+.2f}%
+- 52-Week Range: ${stock2_data['year_low']:.2f} - ${stock2_data['year_high']:.2f}
+- Average Volume: {stock2_data['avg_volume']:,.0f}
+
+FINANCIAL METRICS:
+- Market Cap: ${stock2_data['market_cap']:,.0f}
+- P/E Ratio: {stock2_data['pe_ratio']}
+- EPS: ${stock2_data['eps']}
+- Profit Margin: {stock2_data['profit_margin']}%
+- Revenue Growth: {stock2_data['revenue_growth']}%
+- Debt/Equity: {stock2_data['debt_to_equity']}
+
+RECENT NEWS SENTIMENT: {stock2_data['news_summary']}
+
+{'='*60}
+ANALYSIS REQUIRED:
+{'='*60}
+
+Please provide a comprehensive comparison covering:
+
+[Positive Developments]:
+- List positive factors for each stock (2-3 points each)
+
+[Potential Concerns]:
+- List risk factors and concerns for each stock (2-3 points each)
+
+[Price Performance Comparison]:
+- Which stock has stronger momentum?
+- Volume trends and liquidity
+
+[Valuation Comparison]:
+- Which offers better value based on P/E, EPS, margins?
+- Growth vs value perspective
+
+[1-Week Forecast]:
+For {ticker1}: [Up/Down/Neutral] - Explain why
+For {ticker2}: [Up/Down/Neutral] - Explain why
+
+[Investment Recommendation]:
+- Which stock is better for 1-week holding?
+- Confidence level (High/Medium/Low)
+- Risk assessment
+- Final verdict with clear reasoning
+
+Be specific, data-driven, and provide actionable insights."""
+        
+    except Exception as e:
+        # Fallback to simpler comparison if data fetch fails
+        return f"""Compare {ticker1} and {ticker2} stocks based on general financial analysis.
+
+Analyze:
+1. Business models and competitive advantages
+2. Market position in their sectors
+3. General investment outlook for next week
+4. Which stock appears more attractive and why
+
+Provide a clear comparison and recommendation.
+
+Note: Unable to fetch detailed data ({str(e)}), providing general analysis."""
+
+
+def create_market_analysis_prompt(query: str) -> str:
+    """Create prompt for market/sector analysis questions"""
+    return f"""{config.SYSTEM_PROMPT}
+
+User Question: {query}
+
+Provide a comprehensive market analysis addressing the user's question. Include:
+- Current market trends
+- Key factors affecting the market/sector
+- Outlook for the coming week
+- Investment implications
+
+Answer:"""
+
+
+def create_education_prompt(query: str) -> str:
+    """Create prompt for educational financial questions"""
+    return f"""You are a helpful financial educator. Explain financial concepts clearly and simply.
+
+Question: {query}
+
+Provide a clear, educational answer that:
+1. Defines key terms
+2. Explains the concept with examples
+3. Shows real-world applications
+4. Keeps it simple for beginners
+
+Answer:"""

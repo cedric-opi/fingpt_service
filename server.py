@@ -4,6 +4,7 @@ Clean, modular architecture with performance optimizations
 """
 import logging
 import time
+from typing import Optional, List 
 from typing import Optional
 from pydantic import BaseModel, Field
 from fastapi import FastAPI, HTTPException
@@ -60,6 +61,10 @@ class ForecastRequest(BaseModel):
     temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="Sampling temperature")
     max_new_tokens: Optional[int] = Field(default=512, ge=50, le=1024, description="Max tokens to generate")
     stream: bool = Field(default=True, description="Stream the response")
+    conversation_context: str = Field(default="")
+    system_prompt: str = Field(default="")
+    instructions: str = Field(default="")
+    image_urls: Optional[List[str]] = None  # For future use with image inputs
 
 
 class ForecastResponse(BaseModel):
@@ -168,7 +173,7 @@ async def list_models():
 @app.post("/v1/chat/completions", response_model=None)
 async def create_forecast(request: ForecastRequest):
     """
-    Main endpoint - now handles ANY financial question!
+    Main endpoint - handles ANY financial question with optional images!
     """
     
     model_info = get_model_info()
@@ -182,6 +187,16 @@ async def create_forecast(request: ForecastRequest):
     start_time = time.time()
     
     try:
+        # ✅ NEW: Analyze images if provided
+        image_context = ""
+        if request.image_urls and len(request.image_urls) > 0:
+            logger.info(f"🖼️  Processing {len(request.image_urls)} image(s)...")
+            from services.image_service import analyze_multiple_images
+            image_context = analyze_multiple_images(request.image_urls)
+            
+            if image_context:
+                logger.info(f"✅ Image analysis complete ({len(image_context)} chars)")
+        
         # Detect question type from message or use ticker-based forecast
         if request.message:
             question_type, extracted_data = detect_question_type(request.message)
@@ -196,11 +211,18 @@ async def create_forecast(request: ForecastRequest):
             ticker = extracted_data.get("ticker", request.ticker)
             
             if not ticker:
-                raise HTTPException(
-                    status_code=400,
-                    detail="No ticker found in message. Please specify a stock ticker (e.g., AAPL)"
-                )
-            
+                # If no ticker but has image, treat as general analysis
+                if image_context:
+                    question_type = "general_chat"
+                    extracted_data = {"query": request.message}
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="No ticker found in message. Please specify a stock ticker (e.g., AAPL)"
+                    )
+        
+        # Build prompt for each question type
+        if question_type == "stock_forecast":
             # Build prompt (with caching if enabled)
             if config.ENABLE_CACHING:
                 @cached_financial_data
@@ -221,8 +243,15 @@ async def create_forecast(request: ForecastRequest):
                     request.include_financials
                 )
             
+            # Add custom instructions if provided
+            if request.instructions:
+                prompt = f"{prompt}\n\nAdditional Instructions: {request.instructions}"
+            
+            # Add image context
+            if image_context:
+                prompt = f"{prompt}\n\n[Additional Visual Data from Chart]:\n{image_context}\n\nUse this chart data to enhance your analysis."
+        
         elif question_type == "stock_comparison":
-            # Handle comparison
             tickers = extracted_data.get("tickers", [])
             if len(tickers) < 2:
                 raise HTTPException(
@@ -231,185 +260,141 @@ async def create_forecast(request: ForecastRequest):
                 )
             
             ticker1, ticker2 = tickers[0], tickers[1]
+            from services.question_handlers import create_comparison_prompt
+            prompt = create_comparison_prompt(ticker1, ticker2, request.end_date)
             
-            # Import the handler
-            from services.question_handlers import handle_stock_comparison
-            
-            # For comparison, we'll use the handler directly
-            if request.stream:
-                async def stream_generator():
-                    try:
-                        for chunk in handle_stock_comparison(ticker1, ticker2, request.end_date):
-                            escaped = chunk.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-                            yield f'data: {{"id":"chatcmpl-fingpt","object":"chat.completion.chunk","choices":[{{"delta":{{"content":"{escaped}"}},"index":0}}]}}\n\n'
-                        
-                        yield 'data: [DONE]\n\n'
-                        
-                        if config.LOG_GENERATION_TIME:
-                            elapsed = time.time() - start_time
-                            logger.info(f"⏱️  Comparison time: {elapsed:.1f}s for {ticker1} vs {ticker2}")
-                    
-                    except Exception as e:
-                        error_msg = f"{type(e).__name__}: {str(e)}"
-                        logger.error(f"❌ Comparison error: {error_msg}")
-                        yield f'data: {{"error":"{error_msg}"}}\n\n'
-                
-                return StreamingResponse(
-                    stream_generator(),
-                    media_type="text/event-stream"
-                )
-            else:
-                # Non-streaming
-                text = "".join(handle_stock_comparison(ticker1, ticker2, request.end_date))
-                
-                if config.LOG_GENERATION_TIME:
-                    elapsed = time.time() - start_time
-                    logger.info(f"⏱️  Comparison time: {elapsed:.1f}s for {ticker1} vs {ticker2}")
-                
-                return JSONResponse({
-                    "id": "chatcmpl-fingpt",
-                    "object": "chat.completion",
-                    "choices": [{
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": text
-                        },
-                        "finish_reason": "stop"
-                    }]
-                })
-            
+            if image_context:
+                prompt = f"{prompt}\n\n[Chart Analysis]:\n{image_context}"
+        
         elif question_type == "market_analysis":
-            prompt = f"""{config.SYSTEM_PROMPT}
-
-User Question: {extracted_data['query']}
-
-Provide a comprehensive market analysis addressing the user's question. Include:
-- Current market trends
-- Key factors affecting the market/sector
-- Outlook for the coming week
-- Investment implications"""
+            from services.question_handlers import create_market_analysis_prompt
+            prompt = create_market_analysis_prompt(extracted_data["query"])
             
+            if image_context:
+                prompt = f"{prompt}\n\n[Visual Market Data]:\n{image_context}"
+        
         elif question_type == "financial_education":
-            prompt = f"""You are a helpful financial educator. Explain financial concepts clearly and simply.
-
-Question: {extracted_data['query']}
-
-Provide a clear, educational answer that:
-1. Defines key terms
-2. Explains the concept with examples
-3. Shows real-world applications
-4. Keeps it simple for beginners"""
+            from services.question_handlers import create_education_prompt
+            prompt = create_education_prompt(extracted_data["query"])
             
+            if image_context:
+                prompt = f"{prompt}\n\n[Visual Reference]:\n{image_context}"
+        
         elif question_type == "investment_advice":
-            prompt = f"""You are a financial analyst providing educational investment guidance.
-
-Question: {extracted_data['query']}
-
-Provide thoughtful guidance that:
-1. Analyzes the investment question objectively
-2. Discusses pros and cons
-3. Mentions key considerations
-4. Emphasizes this is educational, not personalized advice
-
-IMPORTANT: Always remind users to consult with a licensed financial advisor before making investment decisions."""
+            from services.question_handlers import create_investment_advice_prompt
+            prompt = create_investment_advice_prompt(extracted_data["query"])
             
+            if image_context:
+                prompt = f"{prompt}\n\n[Chart Analysis]:\n{image_context}"
+        
+        elif question_type == "general_chat":
+            # Use system prompt from request OR fallback to default
+            base_prompt = request.system_prompt or config.SYSTEM_PROMPT
+            
+            if request.instructions:
+                base_prompt = f"{base_prompt}\n\nAdditional Instructions: {request.instructions}"
+            
+            # Build prompt with optional image context
+            if image_context:
+                prompt = f"{base_prompt}\n\n[Chart/Image Analysis]:\n{image_context}\n\nUser Question: {request.message}\n\nProvide a detailed analysis based on the chart data and question."
+            else:
+                if request.conversation_context:
+                    prompt = f"{base_prompt}\n\nPrevious conversation context:\n{request.conversation_context}\n\nCurrent question: {request.message}\n\nAssistant:"
+                else:
+                    prompt = f"{base_prompt}\n\nUser: {request.message}\n\nAssistant:"
+        
         else:
-            # General chat
+            # Fallback for any other type
             prompt = f"{config.SYSTEM_PROMPT}\n\nUser: {request.message}\n\nAssistant:"
         
-        # Generate forecast/response (only if not comparison, which was handled above)
-        if question_type != "stock_comparison":
-            if request.stream:
-                # Streaming response
-                async def stream_generator():
-                    try:
-                        # Use caching if enabled and it's a stock forecast
-                        if config.ENABLE_CACHING and question_type == "stock_forecast":
-                            generator = cached_forecast(generate_forecast)(
-                                prompt,
-                                request.temperature,
-                                request.max_new_tokens,
-                                stream=True
-                            )
-                        else:
-                            generator = generate_forecast(
-                                prompt,
-                                request.temperature,
-                                request.max_new_tokens,
-                                stream=True
-                            )
-                        
-                        for chunk in generator:
-                            # Escape special characters for JSON
-                            escaped = chunk.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-                            yield f'data: {{"id":"chatcmpl-fingpt","object":"chat.completion.chunk","choices":[{{"delta":{{"content":"{escaped}"}},"index":0}}]}}\n\n'
-                        
-                        yield 'data: [DONE]\n\n'
-                        
-                        # Log completion time
-                        if config.LOG_GENERATION_TIME:
-                            elapsed = time.time() - start_time
-                            ticker_or_type = extracted_data.get("ticker", question_type)
-                            logger.info(f"⏱️  Total time: {elapsed:.1f}s for {ticker_or_type}")
+        # ✅ UNIFIED GENERATION - All question types use this same code
+        if request.stream:
+            # Streaming response
+            async def stream_generator():
+                try:
+                    # Use caching only for stock forecasts
+                    if config.ENABLE_CACHING and question_type == "stock_forecast":
+                        gen = cached_forecast(generate_forecast)(
+                            prompt,
+                            request.temperature,
+                            request.max_new_tokens,
+                            stream=True
+                        )
+                    else:
+                        gen = generate_forecast(
+                            prompt,
+                            request.temperature,
+                            request.max_new_tokens,
+                            stream=True
+                        )
                     
-                    except Exception as e:
-                        error_msg = f"{type(e).__name__}: {str(e)}"
-                        logger.error(f"❌ Stream error: {error_msg}")
-                        yield f'data: {{"error":"{error_msg}"}}\n\n'
+                    for chunk in gen:
+                        escaped = chunk.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+                        yield f'data: {{"id":"chatcmpl-fingpt","object":"chat.completion.chunk","choices":[{{"delta":{{"content":"{escaped}"}},"index":0}}]}}\n\n'
+                    
+                    yield 'data: [DONE]\n\n'
+                    
+                    if config.LOG_GENERATION_TIME:
+                        elapsed = time.time() - start_time
+                        ticker_or_type = extracted_data.get("ticker", question_type)
+                        logger.info(f"⏱️  Total time: {elapsed:.1f}s for {ticker_or_type}")
                 
-                return StreamingResponse(
-                    stream_generator(),
-                    media_type="text/event-stream"
+                except Exception as e:
+                    error_msg = f"{type(e).__name__}: {str(e)}"
+                    logger.error(f"❌ Stream error: {error_msg}")
+                    yield f'data: {{"error":"{error_msg}"}}\n\n'
+            
+            return StreamingResponse(
+                stream_generator(),
+                media_type="text/event-stream"
+            )
+        
+        else:
+            # Non-streaming response
+            if config.ENABLE_CACHING and question_type == "stock_forecast":
+                gen = cached_forecast(generate_forecast)(
+                    prompt,
+                    request.temperature,
+                    request.max_new_tokens,
+                    stream=False
+                )
+            else:
+                gen = generate_forecast(
+                    prompt,
+                    request.temperature,
+                    request.max_new_tokens,
+                    stream=False
                 )
             
-            else:
-                # Non-streaming response
-                if config.ENABLE_CACHING and question_type == "stock_forecast":
-                    generator = cached_forecast(generate_forecast)(
-                        prompt,
-                        request.temperature,
-                        request.max_new_tokens,
-                        stream=False
-                    )
-                else:
-                    generator = generate_forecast(
-                        prompt,
-                        request.temperature,
-                        request.max_new_tokens,
-                        stream=False
-                    )
-                
-                text = "".join(generator)
-                
-                # Log completion time
-                if config.LOG_GENERATION_TIME:
-                    elapsed = time.time() - start_time
-                    ticker_or_type = extracted_data.get("ticker", question_type)
-                    logger.info(f"⏱️  Total time: {elapsed:.1f}s for {ticker_or_type}")
-                
-                return JSONResponse({
-                    "id": "chatcmpl-fingpt",
-                    "object": "chat.completion",
-                    "choices": [{
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": text
-                        },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {
-                        "prompt_tokens": len(prompt.split()),
-                        "completion_tokens": len(text.split()),
-                        "total_tokens": len(prompt.split()) + len(text.split())
-                    }
-                })
-
+            text = "".join(gen)
+            
+            if config.LOG_GENERATION_TIME:
+                elapsed = time.time() - start_time
+                ticker_or_type = extracted_data.get("ticker", question_type)
+                logger.info(f"⏱️  Total time: {elapsed:.1f}s for {ticker_or_type}")
+            
+            return JSONResponse({
+                "id": "chatcmpl-fingpt",
+                "object": "chat.completion",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": text
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": len(prompt.split()),
+                    "completion_tokens": len(text.split()),
+                    "total_tokens": len(prompt.split()) + len(text.split())
+                }
+            })
+        
     except ValueError as e:
         logger.error(f"❌ Data error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-
+    
     except Exception as e:
         logger.error(f"❌ Generation error: {e}")
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
