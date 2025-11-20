@@ -18,19 +18,9 @@ Financial stock forecasting using FinGPT (Llama-2-7b) with 4-bit quantization fo
 
 ---
 
-## 📊 Performance
-
-| Configuration | Time per Forecast | Memory Usage | Quality |
-|--------------|-------------------|--------------|---------|
-| **4-bit (Recommended)** | 12-18 min | 4-6GB | Excellent |
-| 8-bit | 20-30 min | 7-9GB | Better |
-| FP16 (old) | 2-5 hours | 14-16GB | Best |
-
----
-
 ## 🚀 Quick Start
 
-### 1. Install Dependencies
+### 1.1 Install Dependencies for MacOS
 
 ```bash
 # Clone or copy the project files
@@ -66,6 +56,34 @@ ls -lh models/
 # Start server
 python server.py
 ```
+### 1.2 Install Dependencies for Window
+# Clone project
+cd fingpt-server
+
+# Create virtual environment
+python -m venv venv
+.\venv\Scripts\activate
+
+# Install basic requirements
+pip install -r requirements.txt
+
+# Install CPU-only prebuilt wheel
+pip install llama-cpp-python --no-cache-dir --force-reinstall
+python -c "from llama_cpp import Llama; print('✅ llama-cpp-python installed on Windows!')"
+
+# Download the model
+pip install huggingface-hub
+mkdir models
+huggingface-cli download TheBloke/Llama-2-7B-Chat-GGUF `
+  llama-2-7b-chat.Q4_K_M.gguf `
+  --local-dir ./models `
+  --local-dir-use-symlinks False
+
+# If neccessary
+huggingface-cli login
+
+# Start server
+python server.py
 
 ### 2. Configure
 
@@ -127,10 +145,6 @@ fingpt-server/
 │   └── test_cache.sh       # 🧪 Cache testing
 │
 └── docs/
-    ├── SETUP_GUIDE.md           # 📖 Complete setup guide
-    ├── OPTIMIZATION_STRATEGY.md # 🎯 Optimization details
-    ├── EXECUTIVE_SUMMARY.md     # 📊 Performance summary
-    └── RESTRUCTURE_PLAN.md      # 🏗️ Architecture docs
 ```
 
 ---
